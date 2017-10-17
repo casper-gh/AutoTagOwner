@@ -1,0 +1,601 @@
+{
+    "AWSTemplateFormatVersion" : "2010-09-09",
+    "Description"              : "Auto tag owner for resources on launch",
+    "Metadata"                 : {
+        "AWS::CloudFormation::Interface" : {
+            "ParameterGroups" : [
+                {
+                    "Label" : {
+                        "default" : "Prerequisites"
+                    },
+                    "Parameters" : [
+                        "IsCloudTrailEnabled"
+                    ]
+                }
+            ],
+            "ParameterLabels" : {
+                "IsCloudTrailEnabled" : {
+                    "default" : "Is CloudTrail already enabled in this region? CloudTrail is a requirement for Cloudwatch Events. If not enabled, please enable CloudTrail before proceeding."
+                }
+            }
+        }
+    },
+    "Parameters"               : {
+        "IsCloudTrailEnabled" : {
+            "Description" : "Specify if CloudTrail is enabled in the current region",
+            "Type"        : "String",
+            "Default"     : "Yes",
+            "AllowedValues" : [
+                "Yes",
+                "No"
+            ]
+        },
+        "S3Bucket" : {
+            "Description" : "S3 bucket for lambda codes",
+            "Type"        : "String"
+        }
+    },
+    "Conditions"               : {
+        "CreateResources" : {
+            "Fn::Equals" : [
+                {
+                    "Ref" : "IsCloudTrailEnabled"
+                },
+                "Yes"
+            ]
+        }
+    },
+    "Resources": {
+
+        "EC2EventsRule" : {
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Description" : "Trigger Lambda a function anytime new EC2 resources are created (EC2, EBS, Snapshot, AMI, VPC, SG)",
+                "EventPattern" : {
+                    "detail-type" : [
+                        "AWS API Call via CloudTrail"
+                    ],
+                    "detail"      : {
+                        "eventSource" : [
+                            "ec2.amazonaws.com"
+                        ],
+                        "eventName"   : [
+                            "CreateVolume",
+                            "RunInstances",
+                            "CreateImage",
+                            "CreateSnapshot",
+                            "CreateVpc",
+                            "CreateSecurityGroup"
+                        ]
+                    }
+                },
+                "Name"         : "New-EC2-Resources-Event",
+                "State"        : "ENABLED",
+                "Targets"      : [
+                    {
+                        "Arn" : {
+                            "Fn::GetAtt" : [ "EC2TagCheckFunction" , "Arn" ]
+                        },
+                        "Id"  : "Production"
+                    }
+                ]
+            }
+        },
+        "EC2TagCheckFunction"    : {
+            "Type" : "AWS::Lambda::Function",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Code": {
+                    "S3Bucket": { "Ref" : "S3Bucket" },
+                    "S3Key": "ec2.zip"
+                },
+                "Description" : "This function tags EC2 Resources in response to Cloudwatch Events.",
+                "Handler"     : "ec2.lambda_handler",
+                "Role"        : {
+                    "Fn::GetAtt" : [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime"     : "python2.7",
+                "Timeout"     : "60"
+            }
+        },
+        "EC2TagCheckFunctionLambdaInvokePermission" : {
+            "Type" : "AWS::Lambda::Permission",
+            "Properties" : {
+                "FunctionName" : {
+                    "Ref" : "EC2TagCheckFunction"
+                },
+                "Action"       : "lambda:InvokeFunction",
+                "Principal"    : "events.amazonaws.com",
+                "SourceArn"    : {
+                    "Fn::GetAtt" : [
+                        "EC2EventsRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+
+        "ELBEventRule" : {
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Description" : "Trigger a Lambda function anytime a new ELB resource is created",
+                "EventPattern" : {
+                    "detail-type" : [
+                        "AWS API Call via CloudTrail"
+                    ],
+                    "detail"      : {
+                        "eventSource" : [
+                            "elasticloadbalancing.amazonaws.com"
+                        ],
+                        "eventName"   : [
+                            "CreateLoadBalancer"
+                        ]
+                    }
+                },
+                "Name"         : "New-ELBInstance-Event",
+                "State"        : "ENABLED",
+                "Targets"      : [
+                    {
+                        "Arn" : {
+                            "Fn::GetAtt" : [ "ELBTagCheckFunction" , "Arn" ]
+                        },
+                        "Id"  : "Production"
+                    }
+                ]
+            }
+        },
+        "ELBTagCheckFunction"    : {
+            "Type" : "AWS::Lambda::Function",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Code": {
+                    "S3Bucket": { "Ref" : "S3Bucket" },
+                    "S3Key": "elb.zip"
+                },
+                "Description" : "This function tags RDS Resources in response to Cloudwatch Events.",
+                "Handler"     : "elb.lambda_handler",
+                "Role"        : {
+                    "Fn::GetAtt" : [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime"     : "python2.7",
+                "Timeout"     : "60"
+            }
+        },
+        "ELBTagCheckFunctionLambdaInvokePermission" : {
+            "Type" : "AWS::Lambda::Permission",
+            "Properties" : {
+                "FunctionName" : {
+                    "Ref" : "ELBTagCheckFunction"
+                },
+                "Action"       : "lambda:InvokeFunction",
+                "Principal"    : "events.amazonaws.com",
+                "SourceArn"    : {
+                    "Fn::GetAtt" : [
+                        "ELBEventRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+
+        "RDSEventRule" : {
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Description" : "Trigger a Lambda function anytime a new RDS resource is created",
+                "EventPattern" : {
+                    "detail-type" : [
+                        "AWS API Call via CloudTrail"
+                    ],
+                    "detail"      : {
+                        "eventSource" : [
+                            "rds.amazonaws.com"
+                        ],
+                        "eventName"   : [
+                            "CreateDBInstance",
+                            "CreateDBInstanceReadReplica"
+                        ]
+                    }
+                },
+                "Name"         : "New-RDSInstance-Event",
+                "State"        : "ENABLED",
+                "Targets"      : [
+                    {
+                        "Arn" : {
+                            "Fn::GetAtt" : [ "RDSTagCheckFunction" , "Arn" ]
+                        },
+                        "Id"  : "Production"
+                    }
+                ]
+            }
+        },
+        "RDSTagCheckFunction"    : {
+            "Type" : "AWS::Lambda::Function",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Code": {
+                    "S3Bucket": { "Ref" : "S3Bucket" },
+                    "S3Key": "rds.zip"
+                },
+                "Description" : "This function tags RDS Resources in response to Cloudwatch Events.",
+                "Handler"     : "rds.lambda_handler",
+                "Role"        : {
+                    "Fn::GetAtt" : [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime"     : "python2.7",
+                "Timeout"     : "60"
+            }
+        },
+        "RDSTagCheckFunctionLambdaInvokePermission" : {
+            "Type" : "AWS::Lambda::Permission",
+            "Properties" : {
+                "FunctionName" : {
+                    "Ref" : "RDSTagCheckFunction"
+                },
+                "Action"       : "lambda:InvokeFunction",
+                "Principal"    : "events.amazonaws.com",
+                "SourceArn"    : {
+                    "Fn::GetAtt" : [
+                        "RDSEventRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+
+        "DynamoDBEventRule" : {
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Description" : "Trigger a Lambda function anytime a new DynamoDB resource is created",
+                "EventPattern" : {
+                    "detail-type" : [
+                        "AWS API Call via CloudTrail"
+                    ],
+                    "detail"      : {
+                        "eventSource" : [
+                            "dynamodb.amazonaws.com"
+                        ],
+                        "eventName"   : [
+                            "CreateTable"
+                        ]
+                    }
+                },
+                "Name"         : "New-DynamoDBInstance-Event",
+                "State"        : "ENABLED",
+                "Targets"      : [
+                    {
+                        "Arn" : {
+                            "Fn::GetAtt" : [ "DynamoDBTagCheckFunction" , "Arn" ]
+                        },
+                        "Id"  : "Production"
+                    }
+                ]
+            }
+        },
+        "DynamoDBTagCheckFunction"    : {
+            "Type" : "AWS::Lambda::Function",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Code": {
+                    "S3Bucket": { "Ref" : "S3Bucket" },
+                    "S3Key": "dynamodb.zip"
+                },
+                "Description" : "This function tags DynamoDB Resources in response to Cloudwatch Events.",
+                "Handler"     : "dynamodb.lambda_handler",
+                "Role"        : {
+                    "Fn::GetAtt" : [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime"     : "python2.7",
+                "Timeout"     : "60"
+            }
+        },
+        "DynamoDBTagCheckLambdaInvokePermission" : {
+            "Type" : "AWS::Lambda::Permission",
+            "Properties" : {
+                "FunctionName" : {
+                    "Ref" : "DynamoDBTagCheckFunction"
+                },
+                "Action"       : "lambda:InvokeFunction",
+                "Principal"    : "events.amazonaws.com",
+                "SourceArn"    : {
+                    "Fn::GetAtt" : [
+                        "DynamoDBEventRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+
+        "ESEventRule" : {
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Description" : "Trigger a Lambda function anytime a new ElasticSearch resource is created",
+                "EventPattern" : {
+                    "detail-type" : [
+                        "AWS API Call via CloudTrail"
+                    ],
+                    "detail"      : {
+                        "eventSource" : [
+                            "es.amazonaws.com"
+                        ],
+                        "eventName"   : [
+                            "CreateElasticsearchDomain"
+                        ]
+                    }
+                },
+                "Name"         : "New-ESDomain-Event",
+                "State"        : "ENABLED",
+                "Targets"      : [
+                    {
+                        "Arn" : {
+                            "Fn::GetAtt" : [ "ESTagCheckFunction" , "Arn" ]
+                        },
+                        "Id"  : "Production"
+                    }
+                ]
+            }
+        },
+        "ESTagCheckFunction"    : {
+            "Type" : "AWS::Lambda::Function",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Code": {
+                    "S3Bucket": { "Ref" : "S3Bucket" },
+                    "S3Key": "es.zip"
+                },
+                "Description" : "This function tags ElasticSearch Resources in response to Cloudwatch Events.",
+                "Handler"     : "es.lambda_handler",
+                "Role"        : {
+                    "Fn::GetAtt" : [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime"     : "python2.7",
+                "Timeout"     : "60"
+            }
+        },
+        "ESTagCheckLambdaInvokePermission" : {
+            "Type" : "AWS::Lambda::Permission",
+            "Properties" : {
+                "FunctionName" : {
+                    "Ref" : "ESTagCheckFunction"
+                },
+                "Action"       : "lambda:InvokeFunction",
+                "Principal"    : "events.amazonaws.com",
+                "SourceArn"    : {
+                    "Fn::GetAtt" : [
+                        "ESEventRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+
+        "S3EventRule" : {
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Description" : "Trigger a Lambda function anytime a new S3 resource is created",
+                "EventPattern" : {
+                    "detail-type" : [
+                        "AWS API Call via CloudTrail"
+                    ],
+                    "detail"      : {
+                        "eventSource" : [
+                            "s3.amazonaws.com"
+                        ],
+                        "eventName"   : [
+                            "CreateBucket"
+                        ]
+                    }
+                },
+                "Name"         : "New-S3Bucket-Event",
+                "State"        : "ENABLED",
+                "Targets"      : [
+                    {
+                        "Arn" : {
+                            "Fn::GetAtt" : [ "S3TagCheckFunction" , "Arn" ]
+                        },
+                        "Id"  : "Production"
+                    }
+                ]
+            }
+        },
+        "S3TagCheckFunction"    : {
+            "Type" : "AWS::Lambda::Function",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Code": {
+                    "S3Bucket": { "Ref" : "S3Bucket" },
+                    "S3Key": "s3.zip"
+                },
+                "Description" : "This function tags S3 Bucket in response to Cloudwatch Events.",
+                "Handler"     : "s3.lambda_handler",
+                "Role"        : {
+                    "Fn::GetAtt" : [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime"     : "python2.7",
+                "Timeout"     : "60"
+            }
+        },
+        "S3TagCheckLambdaInvokePermission" : {
+            "Type" : "AWS::Lambda::Permission",
+            "Properties" : {
+                "FunctionName" : {
+                    "Ref" : "S3TagCheckFunction"
+                },
+                "Action"       : "lambda:InvokeFunction",
+                "Principal"    : "events.amazonaws.com",
+                "SourceArn"    : {
+                    "Fn::GetAtt" : [
+                        "S3EventRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+
+        "LambdaEventRule" : {
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Description" : "Trigger a Lambda function anytime a new Lambda function is created",
+                "EventPattern" : {
+                    "detail-type" : [
+                        "AWS API Call via CloudTrail"
+                    ],
+                    "detail"      : {
+                        "eventSource" : [
+                            "lambda.amazonaws.com"
+                        ],
+                        "eventName"   : [
+                            "CreateFunction20150331"
+                        ]
+                    }
+                },
+                "Name"         : "New-LambdaFunction-Event",
+                "State"        : "ENABLED",
+                "Targets"      : [
+                    {
+                        "Arn" : {
+                            "Fn::GetAtt" : [ "LambdaTagCheckFunction" , "Arn" ]
+                        },
+                        "Id"  : "Production"
+                    }
+                ]
+            }
+        },
+        "LambdaTagCheckFunction"    : {
+            "Type" : "AWS::Lambda::Function",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "Code": {
+                    "S3Bucket": { "Ref" : "S3Bucket" },
+                    "S3Key": "lambda.zip"
+                },
+                "Description" : "This function tags Lambda function in response to Cloudwatch Events.",
+                "Handler"     : "lambda.lambda_handler",
+                "Role"        : {
+                    "Fn::GetAtt" : [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime"     : "python2.7",
+                "Timeout"     : "60"
+            }
+        },
+        "lambdaTagCheckLambdaInvokePermission" : {
+            "Type" : "AWS::Lambda::Permission",
+            "Properties" : {
+                "FunctionName" : {
+                    "Ref" : "LambdaTagCheckFunction"
+                },
+                "Action"       : "lambda:InvokeFunction",
+                "Principal"    : "events.amazonaws.com",
+                "SourceArn"    : {
+                    "Fn::GetAtt" : [
+                        "LambdaEventRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+
+        "LambdaRole"                 : {
+            "Type" : "AWS::IAM::Role",
+            "Condition" : "CreateResources",
+            "Properties" : {
+                "AssumeRolePolicyDocument" : {
+                    "Version" : "2012-10-17",
+                    "Statement" : [
+                        {
+                            "Effect" : "Allow",
+                            "Principal" : {
+                                "Service" : [
+                                    "lambda.amazonaws.com"
+                                ]
+                            },
+                            "Action"    : [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Policies"                 : [
+                    {
+                        "PolicyName" : "LambdaRoleForEC2UntaggedAlert",
+                        "PolicyDocument" : {
+                            "Version" : "2012-10-17",
+                            "Statement" : [
+                                {
+                                    "Sid" : "Stmt1458923097000",
+                                    "Effect" : "Allow",
+                                    "Action" : [
+                                        "cloudtrail:LookupEvents"
+                                    ],
+                                    "Resource" : [
+                                        "*"
+                                    ]
+                                },
+                                {
+                                    "Sid" : "Stmt1458923121000",
+                                    "Effect" : "Allow",
+                                    "Action" : [
+                                        "ec2:Describe*",
+                                        "ec2:CreateTags",
+                                        "elasticloadbalancing:AddTags",
+                                        "elasticloadbalancing:Describe*",
+                                        "rds:Describe*",
+                                        "rds:List*",
+                                        "rds:AddTagsToResource",
+                                        "dynamodb:List*",
+                                        "dynamodb:TagResource",
+                                        "dynamodb:DescribeTable",
+                                        "es:List*",
+                                        "es:AddTags",
+                                        "es:CreateElasticsearchDomain*",
+                                        "s3:Get*",
+                                        "s3:PutBucketTagging",
+                                        "s3:PutObjectTagging",
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents",
+                                        "lambda:TagResource",
+                                        "lambda:List*",
+                                        "sns:*"
+                                    ],
+                                    "Resource" : [
+                                        "*"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    },
+    "Outputs"                  : {
+    }
+}
